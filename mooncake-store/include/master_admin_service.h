@@ -19,6 +19,7 @@ namespace mooncake {
 
 extern const uint64_t kMetricReportIntervalSeconds;
 
+class HintReceiver;
 class WrappedMasterService;
 
 class MasterAdminServer {
@@ -41,6 +42,10 @@ class MasterAdminServer {
     void SetServiceDelegate(std::shared_ptr<WrappedMasterService> service);
 
     void SetServiceAvailable(bool available);
+
+    // Receives hints on a ZMQ PULL socket at `endpoint` and hands them to the
+    // active service; see HintReceiver. Stopped with the server.
+    bool StartHintReceiver(const std::string& endpoint);
 
    private:
     struct RuntimeSnapshot {
@@ -126,6 +131,7 @@ class MasterAdminServer {
     bool enable_metric_reporting_ = false;
     coro_http::coro_http_server http_server_;
     std::thread metric_report_thread_;
+    std::unique_ptr<HintReceiver> hint_receiver_;
     std::atomic<bool> metric_report_running_{false};
     std::binary_semaphore metric_report_stop_sem_{0};
     std::atomic<bool> started_{false};

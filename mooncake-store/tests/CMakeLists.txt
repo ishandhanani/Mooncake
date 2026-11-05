@@ -76,6 +76,12 @@ if(ENABLE_KV_EVENTS)
                              PRIVATE MOONCAKE_ENABLE_KV_EVENTS=1)
   target_link_libraries(kv_event_publisher_test PRIVATE Mooncake::libzmq)
 endif()
+add_store_test(hint_receiver_test hint_receiver_test.cpp)
+if(ENABLE_KV_EVENTS)
+  target_compile_definitions(hint_receiver_test
+                             PRIVATE MOONCAKE_ENABLE_KV_EVENTS=1)
+  target_link_libraries(hint_receiver_test PRIVATE Mooncake::libzmq)
+endif()
 add_subdirectory(master_service)
 
 add_store_test(master_service_test master_service_test.cpp)

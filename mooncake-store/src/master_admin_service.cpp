@@ -1,5 +1,7 @@
 #include "master_admin_service.h"
 
+#include "hint_receiver.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -325,7 +327,24 @@ bool MasterAdminServer::Start() {
     return true;
 }
 
+bool MasterAdminServer::StartHintReceiver(const std::string& endpoint) {
+    hint_receiver_ = std::make_unique<HintReceiver>(
+        endpoint, [this](const HintReceiver::PinHint& hint) {
+            // A hint for a master that is not serving is dropped.
+            if (auto service = GetActiveService()) {
+                service->PinObjects(hint.keys, hint.ttl_ms, hint.priority,
+                                    hint.tenant_id);
+            }
+        });
+    if (!hint_receiver_->Start()) {
+        hint_receiver_.reset();
+        return false;
+    }
+    return true;
+}
+
 void MasterAdminServer::Stop() {
+    hint_receiver_.reset();
     metric_report_running_.store(false, std::memory_order_relaxed);
     if (started_.exchange(false)) {
         http_server_.stop();
