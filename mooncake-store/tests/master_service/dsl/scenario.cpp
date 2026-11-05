@@ -99,6 +99,15 @@ BatchRemoveAction BatchRemove(std::initializer_list<std::string> keys) {
     return action;
 }
 
+PinObjectsAction PinObjects(std::vector<std::string> keys, uint64_t ttl_ms,
+                            uint32_t priority) {
+    PinObjectsAction action;
+    action.keys = std::move(keys);
+    action.ttl_ms = ttl_ms;
+    action.priority = priority;
+    return action;
+}
+
 RemoveAction Remove(std::string key) { return {.key = std::move(key)}; }
 
 ClearReplicasAction ClearReplicas(std::initializer_list<std::string> keys) {
@@ -626,6 +635,27 @@ MasterScenario& MasterScenario::When(BatchRemoveAction action) {
     for (size_t index = 0; index < results.size(); ++index) {
         ValidateActionResult(
             "BatchRemove(" + action.keys[index] + ")", action.expected_error,
+            results[index].has_value(),
+            results[index] ? ErrorCode::OK : results[index].error());
+    }
+    return *this;
+}
+
+MasterScenario& MasterScenario::When(PinObjectsAction action) {
+    if (!EnsureService()) {
+        return *this;
+    }
+
+    const auto results = service_->PinObjects(
+        action.keys, TenantId(action.tenant), action.ttl_ms, action.priority);
+    if (results.size() != action.keys.size()) {
+        Fail("PinObjects returned " + std::to_string(results.size()) +
+             " results; expected " + std::to_string(action.keys.size()));
+        return *this;
+    }
+    for (size_t index = 0; index < results.size(); ++index) {
+        ValidateActionResult(
+            "PinObjects(" + action.keys[index] + ")", action.expected_error,
             results[index].has_value(),
             results[index] ? ErrorCode::OK : results[index].error());
     }
