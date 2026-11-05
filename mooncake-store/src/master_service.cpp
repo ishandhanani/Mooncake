@@ -2433,6 +2433,70 @@ auto MasterService::BatchUpdateSoftPin(const std::vector<std::string>& keys,
     return results;
 }
 
+auto MasterService::PinObjects(const std::vector<std::string>& keys,
+                               const TenantId& tenant_id, uint64_t ttl_ms,
+                               uint32_t priority)
+    -> std::vector<tl::expected<PinOutcome, ErrorCode>> {
+    // A controller pins by intent, not by the master's limits: cap the TTL
+    // rather than reject it, and let 0 ask for the default.
+    const uint64_t capped_ttl_ms = std::min(
+        ttl_ms == 0 ? default_kv_soft_pin_ttl_ : ttl_ms, max_kv_soft_pin_ttl_);
+    if (!tenant_id.IsValid() || capped_ttl_ms == 0) {
+        return std::vector<tl::expected<PinOutcome, ErrorCode>>(
+            keys.size(), tl::make_unexpected(ErrorCode::INVALID_PARAMS));
+    }
+    std::shared_lock<std::shared_mutex> snapshot_lock(master_state_mutex_);
+    const TenantId normalized_tenant = ResolveRequestTenantId(tenant_id);
+    const auto now = std::chrono::system_clock::now();
+    const auto deadline = now + std::chrono::milliseconds(capped_ttl_ms);
+    std::vector<tl::expected<PinOutcome, ErrorCode>> results;
+    results.reserve(keys.size());
+    for (const auto& key : keys) {
+        if (key.empty()) {
+            results.emplace_back(
+                tl::make_unexpected(ErrorCode::INVALID_PARAMS));
+            continue;
+        }
+        // Recorded before the key is looked at, so a write that completes in
+        // between still finds the pin.
+        pending_pins_.Record(normalized_tenant.value(), key, deadline, priority,
+                             now);
+        MetadataAccessorRW accessor(this,
+                                    ObjectIdentity{normalized_tenant, key});
+        if (!accessor.Exists() || accessor.InProcessing() ||
+            accessor.Get().pending_soft_pin_action ||
+            !accessor.Get().HasReplica(&Replica::fn_is_completed)) {
+            results.emplace_back(PinOutcome::kPending);
+            continue;
+        }
+        ApplyPendingPin(accessor.Get(), normalized_tenant, key);
+        results.emplace_back(PinOutcome::kPinned);
+    }
+    return results;
+}
+
+void MasterService::ApplyPendingPin(ObjectMetadata& metadata,
+                                    const TenantId& tenant_id,
+                                    const std::string& key) {
+    const auto now = std::chrono::system_clock::now();
+    const auto pin = pending_pins_.Take(tenant_id.value(), key, now);
+    if (!pin) {
+        return;
+    }
+    // Rounded up, so the pin lasts at least as long as was asked.
+    const auto ttl =
+        std::chrono::ceil<std::chrono::milliseconds>(pin->deadline - now);
+    if (ttl <= std::chrono::milliseconds::zero()) {
+        return;
+    }
+    ApplySoftPinEvaluation(
+        metadata, metadata.ApplySoftPin({.action = SoftPinAction::ENABLE,
+                                         .ttl = ttl,
+                                         .keep_later_deadline = true},
+                                        now));
+    metadata.eviction_priority = pin->priority;
+}
+
 void MasterService::ApplySoftPinMetricDelta(int metric_delta) {
     if (metric_delta > 0) {
         MasterMetricManager::instance().inc_soft_pin_key_count(metric_delta);
@@ -5630,6 +5694,8 @@ auto MasterService::PutEnd(const UUID& client_id, const ObjectMeta& object_meta,
     SyncCacheTotalAccounting(metadata);
     // TODO: add inc_nof_cache_nums() (ranhaojia)
     metadata.GrantReadLease(std::chrono::milliseconds::zero());
+    // A pin asked for before this write applies now that the key is here.
+    ApplyPendingPin(metadata, object_id.tenant_id, key);
     PublishKvStored(key, metadata, object_id.tenant_id);
 
     if (enable_oplog_ && ordered_oplog_writer_) {
