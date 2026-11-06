@@ -176,6 +176,9 @@ class WrappedMasterService {
         const std::vector<std::string>& keys, uint64_t ttl_ms,
         const std::string& tenant_id = "default");
 
+    // See MasterService::PinMetricsText.
+    std::string PinMetricsText() const { return master_service_.PinMetricsText(); }
+
     // See MasterService::PinObjects.
     std::vector<tl::expected<MasterService::PinOutcome, ErrorCode>> PinObjects(
         const std::vector<std::string>& keys, uint64_t ttl_ms,

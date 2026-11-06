@@ -836,6 +836,14 @@ TEST_F(MasterServiceTest, PinObjectsPinsNowOrWhenTheKeyIsWritten) {
     EXPECT_LE(*later, std::chrono::system_clock::now() +
                           std::chrono::milliseconds(30000));
     EXPECT_EQ(GetEvictionPriority(service, "later"), 7u);
+    const std::string metrics = service.PinMetricsText();
+    EXPECT_NE(metrics.find("master_pin_applied_at_once_total 1"),
+              std::string::npos);
+    EXPECT_NE(metrics.find("master_pin_left_pending_total 1"),
+              std::string::npos);
+    EXPECT_NE(metrics.find("master_pin_pending_applied_on_write_total 1"),
+              std::string::npos)
+        << metrics;
 
     // A pin is taken once: the next write of the key is not pinned again.
     ASSERT_TRUE(service.Remove("later", TenantId::Default(), true));
@@ -939,6 +947,12 @@ TEST(PendingPinsTest, BoundedLaterDeadlineTakenOnce) {
     // A pin taken after its deadline is dropped.
     EXPECT_FALSE(pins.Take("t", "b", soon));
     EXPECT_EQ(pins.Size(), 0u);
+
+    const auto counters = pins.counters();
+    EXPECT_EQ(counters.recorded, 4u);
+    EXPECT_EQ(counters.applied, 2u);       // "a" first, then "u"/"a"
+    EXPECT_EQ(counters.expired, 1u);       // "b" taken at its deadline
+    EXPECT_EQ(counters.dropped_full, 1u);  // "t"/"a" pushed out at capacity
 }
 
 TEST_F(MasterServiceTest, SoftPinZeroTtlSkipsSoftPinRegistration) {

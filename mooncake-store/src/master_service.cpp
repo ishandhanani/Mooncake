@@ -2466,13 +2466,45 @@ auto MasterService::PinObjects(const std::vector<std::string>& keys,
         if (!accessor.Exists() || accessor.InProcessing() ||
             accessor.Get().pending_soft_pin_action ||
             !accessor.Get().HasReplica(&Replica::fn_is_completed)) {
+            pins_left_pending_.fetch_add(1, std::memory_order_relaxed);
             results.emplace_back(PinOutcome::kPending);
             continue;
         }
         ApplyPendingPin(accessor.Get(), normalized_tenant, key);
+        pins_applied_at_once_.fetch_add(1, std::memory_order_relaxed);
         results.emplace_back(PinOutcome::kPinned);
     }
     return results;
+}
+
+std::string MasterService::PinMetricsText() const {
+    const auto pending = pending_pins_.counters();
+    std::string text;
+    auto counter = [&text](const char* name, const char* help, uint64_t value) {
+        text += std::string("# HELP ") + name + " " + help + "\n# TYPE " + name +
+                " counter\n" + name + " " + std::to_string(value) + "\n";
+    };
+    counter("master_pin_applied_at_once_total",
+            "Pinned keys that were complete when the pin arrived",
+            pins_applied_at_once_.load(std::memory_order_relaxed));
+    counter("master_pin_left_pending_total",
+            "Pinned keys not complete yet when the pin arrived",
+            pins_left_pending_.load(std::memory_order_relaxed));
+    // Pins applied at once also pass through the table, so a write applied the rest.
+    const uint64_t at_once = pins_applied_at_once_.load(std::memory_order_relaxed);
+    counter("master_pin_pending_applied_on_write_total",
+            "Pending pins a later write applied",
+            pending.applied > at_once ? pending.applied - at_once : 0);
+    counter("master_pin_pending_expired_total",
+            "Pending pins that ran out before their key was written",
+            pending.expired);
+    counter("master_pin_pending_dropped_full_total",
+            "Pending pins dropped because the table was full",
+            pending.dropped_full);
+    text += "# HELP master_pin_pending_keys Pins waiting for their key\n"
+            "# TYPE master_pin_pending_keys gauge\nmaster_pin_pending_keys " +
+            std::to_string(pending_pins_.Size()) + "\n";
+    return text;
 }
 
 void MasterService::ApplyPendingPin(ObjectMetadata& metadata,

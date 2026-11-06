@@ -30,7 +30,22 @@ class PendingPins {
         uint32_t priority{0};
     };
 
+    /// What became of pins recorded here; read with `counters()`.
+    struct Counters {
+        uint64_t recorded{0};
+        uint64_t applied{0};
+        uint64_t expired{0};
+        uint64_t dropped_full{0};
+    };
+
     explicit PendingPins(size_t capacity) : capacity_(capacity) {}
+
+    Counters counters() const {
+        return {recorded_.load(std::memory_order_relaxed),
+                applied_.load(std::memory_order_relaxed),
+                expired_.load(std::memory_order_relaxed),
+                dropped_full_.load(std::memory_order_relaxed)};
+    }
 
     // Records a pin for `key` until `deadline`. A key already recorded keeps
     // the later deadline and takes the new priority.
@@ -48,12 +63,17 @@ class PendingPins {
         }
         while (!order_.empty() && (order_.size() >= capacity_ ||
                                    order_.front().pin.deadline <= now)) {
+            (order_.front().pin.deadline <= now ? expired_ : dropped_full_)
+                .fetch_add(1, std::memory_order_relaxed);
             index_.erase(order_.front().id);
             order_.pop_front();
         }
         if (capacity_ != 0) {
             order_.push_back(Entry{id, Pin{deadline, priority}});
             index_.emplace(id, std::prev(order_.end()));
+            recorded_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            dropped_full_.fetch_add(1, std::memory_order_relaxed);
         }
         size_.store(order_.size(), std::memory_order_relaxed);
     }
@@ -77,8 +97,10 @@ class PendingPins {
         index_.erase(it);
         size_.store(order_.size(), std::memory_order_relaxed);
         if (pin.deadline <= now) {
+            expired_.fetch_add(1, std::memory_order_relaxed);
             return std::nullopt;
         }
+        applied_.fetch_add(1, std::memory_order_relaxed);
         return pin;
     }
 
@@ -101,6 +123,10 @@ class PendingPins {
     const size_t capacity_;
     std::mutex mutex_;
     std::atomic<size_t> size_{0};
+    std::atomic<uint64_t> recorded_{0};
+    std::atomic<uint64_t> applied_{0};
+    std::atomic<uint64_t> expired_{0};
+    std::atomic<uint64_t> dropped_full_{0};
     // Oldest recorded first.
     std::list<Entry> order_;
     std::unordered_map<std::string, std::list<Entry>::iterator> index_;

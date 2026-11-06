@@ -697,6 +697,10 @@ class MasterService {
                     uint32_t priority)
         -> std::vector<tl::expected<PinOutcome, ErrorCode>>;
 
+    // Prometheus text for pins: keys pinned at once or left pending, and what
+    // became of pending ones (applied by a write, expired, dropped when full).
+    std::string PinMetricsText() const;
+
     /**
      * @brief Batch remove objects and their replicas
      * @param keys The list of keys to remove.
@@ -1655,6 +1659,8 @@ class MasterService {
     // them. Locked after the key, never before.
     static constexpr size_t kMaxPendingPins = 1 << 18;
     PendingPins pending_pins_{kMaxPendingPins};
+    std::atomic<uint64_t> pins_applied_at_once_{0};
+    std::atomic<uint64_t> pins_left_pending_{0};
 
     // Eviction related members
     std::atomic<bool> need_mem_eviction_{

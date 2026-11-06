@@ -411,6 +411,9 @@ std::string MasterAdminServer::BuildMetricsText() const {
     std::string metrics = AppendMetricSections(
         MasterMetricManager::instance().serialize_metrics(),
         HAMetricManager::instance().serialize_metrics());
+    if (auto service = GetActiveService()) {
+        metrics = AppendMetricSections(std::move(metrics), service->PinMetricsText());
+    }
     auto tenant_metrics = BuildTenantQuotaMetricsText();
     if (tenant_metrics.empty()) {
         return metrics;
