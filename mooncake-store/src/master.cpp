@@ -325,6 +325,10 @@ DEFINE_bool(kv_events_emit_object_key, true,
 DEFINE_uint32(kv_events_queue_capacity, 65536,
               "Maximum pending KV events; oldest events are dropped when "
               "the queue is full (0 = unbounded)");
+DEFINE_string(hint_zmq_endpoint, "",
+              "ZMQ endpoint to bind a PULL socket on for KV cache hints, such "
+              "as pins, from an external controller (empty = off; needs "
+              "ENABLE_KV_EVENTS=ON; not with enable_ha)");
 DEFINE_string(ha_backend_type, "etcd",
               "HA backend type, e.g. etcd | redis | k8s");
 DEFINE_int64(ha_leader_lease_ttl_sec,
@@ -1507,6 +1511,10 @@ int main(int argc, char* argv[]) {
         LOG(FATAL) << "enable_oplog requires enable_ha=true";
         return 1;
     }
+    if (master_config.enable_ha && !FLAGS_hint_zmq_endpoint.empty()) {
+        LOG(FATAL) << "hint_zmq_endpoint is not supported with enable_ha=true";
+        return 1;
+    }
     if (master_config.enable_oplog &&
         !mooncake::ha::HaBackendSupportsOpLog(master_config.ha_backend_type)) {
         LOG(FATAL) << "enable_oplog requires ha_backend_type=etcd or redis";
@@ -1746,6 +1754,11 @@ int main(int argc, char* argv[]) {
             mooncake::ha::MasterRuntimeState::kServing);
         admin_server.SetServiceDelegate(wrapped_master_service);
         admin_server.SetServiceAvailable(true);
+        if (!FLAGS_hint_zmq_endpoint.empty() &&
+            !admin_server.StartHintReceiver(FLAGS_hint_zmq_endpoint)) {
+            LOG(ERROR) << "Failed to start the hint socket";
+            return 1;
+        }
 
         // Open the restore lifecycle (RFC #4700, slice 1): the non-HA path
         // has no promotion restore, so it moves Constructed -> Ready ->

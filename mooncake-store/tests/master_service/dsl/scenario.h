@@ -611,6 +611,24 @@ struct BatchRemoveAction {
 
 BatchRemoveAction BatchRemove(std::initializer_list<std::string> keys);
 
+// MasterService::PinObjects on `keys`; a key not written yet is pinned when it
+// is.
+struct PinObjectsAction {
+    std::vector<std::string> keys;
+    uint64_t ttl_ms{0};
+    uint32_t priority{0};
+    std::string tenant{TenantId::Default().value()};
+    std::optional<ErrorCode> expected_error{};
+
+    PinObjectsAction& ExpectError(ErrorCode value) {
+        expected_error = value;
+        return *this;
+    }
+};
+
+PinObjectsAction PinObjects(std::vector<std::string> keys, uint64_t ttl_ms,
+                            uint32_t priority);
+
 struct RemoveAction {
     std::string key;
     std::string tenant{TenantId::Default().value()};
@@ -2180,6 +2198,7 @@ class MasterScenario {
     MasterScenario& When(BatchUpsertStartAction action);
     MasterScenario& When(BatchUpsertEndAction action);
     MasterScenario& When(BatchRemoveAction action);
+    MasterScenario& When(PinObjectsAction action);
     MasterScenario& When(RemoveAction action);
     MasterScenario& When(ClearReplicasAction action);
     MasterScenario& When(CopyStartAction action);

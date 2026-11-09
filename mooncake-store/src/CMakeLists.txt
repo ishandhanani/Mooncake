@@ -58,6 +58,7 @@ set(MOONCAKE_STORE_MASTER_SOURCES
     weight_metadata_store.cpp
     rpc_service.cpp
     master_admin_service.cpp
+    hint_receiver.cpp
     offset_allocator.cpp
     http_metadata_server.cpp
     embedded_master.cpp

@@ -38,6 +38,7 @@
 #include "lease.h"
 #include "master_metric_manager.h"
 #include "mutex.h"
+#include "pending_pins.h"
 #include "segment.h"
 #include "local_ssd/manager.h"
 #include "tenant/quota_policy.h"
@@ -678,6 +679,27 @@ class MasterService {
     auto BatchUpdateSoftPin(const std::vector<std::string>& keys,
                             const TenantId& tenant_id, uint64_t ttl_ms)
         -> std::vector<tl::expected<void, ErrorCode>>;
+
+    enum class PinOutcome : uint8_t {
+        // The key was complete and is soft pinned now.
+        kPinned,
+        // The key is not complete yet; the write that publishes it applies
+        // the pin if that happens before the pin runs out.
+        kPending,
+    };
+
+    // Pins keys for an external controller: soft pin each until now + ttl_ms
+    // (0 means default_kv_soft_pin_ttl; capped at max_kv_soft_pin_ttl; a pin
+    // never shortens a later deadline) with an eviction priority, higher kept
+    // longer. Results follow input order; batches are not atomic.
+    auto PinObjects(const std::vector<std::string>& keys,
+                    const TenantId& tenant_id, uint64_t ttl_ms,
+                    uint32_t priority)
+        -> std::vector<tl::expected<PinOutcome, ErrorCode>>;
+
+    // Prometheus text for pins: keys pinned at once or left pending, and what
+    // became of pending ones (applied by a write, expired, dropped when full).
+    std::string PinMetricsText() const;
 
     /**
      * @brief Batch remove objects and their replicas
@@ -1411,6 +1433,10 @@ class MasterService {
         std::chrono::system_clock::time_point now,
         const std::function<bool(const std::string& key)>& matches_key);
     static void ApplySoftPinMetricDelta(int metric_delta);
+    // Applies the pin PinObjects recorded for `key`, if one is still live,
+    // to the object the caller holds under the key's write lock.
+    void ApplyPendingPin(ObjectMetadata& metadata, const TenantId& tenant_id,
+                         const std::string& key);
     void ApplySoftPinEvaluation(
         const ObjectMetadata& metadata,
         const ObjectMetadata::SoftPinEvaluation& result) const;
@@ -1629,6 +1655,12 @@ class MasterService {
     const uint64_t default_kv_soft_pin_ttl_;  // in milliseconds
     const uint64_t max_kv_soft_pin_ttl_;      // in milliseconds
     const bool allow_evict_soft_pinned_objects_;
+    // Pins recorded by PinObjects for keys not yet complete; PutEnd takes
+    // them. Locked after the key, never before.
+    static constexpr size_t kMaxPendingPins = 1 << 18;
+    PendingPins pending_pins_{kMaxPendingPins};
+    std::atomic<uint64_t> pins_applied_at_once_{0};
+    std::atomic<uint64_t> pins_left_pending_{0};
 
     // Eviction related members
     std::atomic<bool> need_mem_eviction_{
